@@ -1,0 +1,4 @@
+streamlit==1.39.0
+psycopg2-binary==2.9.10
+pandas==2.2.3
+streamlit-autorefresh==1.0.1

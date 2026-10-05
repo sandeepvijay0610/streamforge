@@ -1,0 +1,165 @@
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.7.0
+    container_name: streamforge-kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:29092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.0
+    container_name: streamforge-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        for topic in transactions.raw.v1 transactions.cleaned.v1 transactions.failed.v1 transactions.retry.v1; do
+          kafka-topics --bootstrap-server kafka:29092 \
+            --create --if-not-exists \
+            --topic "$$topic" \
+            --partitions 3 \
+            --replication-factor 1
+        done
+        echo "Topics ready:"
+        kafka-topics --bootstrap-server kafka:29092 --list
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: streamforge-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: streamforge
+      POSTGRES_PASSWORD: streamforge
+      POSTGRES_DB: streamforge
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamforge -d streamforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  console:
+    image: redpandadata/console:latest
+    container_name: streamforge-console
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+  ingestion:
+    build: ./ingestion
+    container_name: streamforge-ingestion
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_RAW_TOPIC: transactions.raw.v1
+      KAFKA_CLIENT_ID: fastapi-ingestor
+      LOG_LEVEL: INFO
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+  etl-consumer:
+    build: ./etl
+    container_name: streamforge-etl
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_RAW_TOPIC: transactions.raw.v1
+      KAFKA_CLEANED_TOPIC: transactions.cleaned.v1
+      KAFKA_FAILED_TOPIC: transactions.failed.v1
+      KAFKA_RETRY_TOPIC: transactions.retry.v1
+      ETL_GROUP_ID: streamforge-etl-v1
+      POSTGRES_DSN: host=postgres port=5432 dbname=streamforge user=streamforge password=streamforge
+      LOG_LEVEL: INFO
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+  db-consumer:
+    build: ./db-consumer
+    container_name: streamforge-db-consumer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CLEANED_TOPIC: transactions.cleaned.v1
+      KAFKA_RETRY_TOPIC: transactions.retry.v1
+      KAFKA_FAILED_TOPIC: transactions.failed.v1
+      DB_CONSUMER_GROUP_ID: streamforge-db-consumer-v1
+      POSTGRES_DSN: host=postgres port=5432 dbname=streamforge user=streamforge password=streamforge
+      LOG_LEVEL: INFO
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+  retry-consumer:
+    build: ./retry-consumer
+    container_name: streamforge-retry-consumer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_RETRY_TOPIC: transactions.retry.v1
+      KAFKA_FAILED_TOPIC: transactions.failed.v1
+      RETRY_CONSUMER_GROUP_ID: streamforge-retry-consumer-v1
+      POSTGRES_DSN: host=postgres port=5432 dbname=streamforge user=streamforge password=streamforge
+      LOG_LEVEL: INFO
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+  fraud-detector:
+    build: ./fraud-detector
+    container_name: streamforge-fraud-detector
+    environment:
+      POSTGRES_DSN: host=postgres port=5432 dbname=streamforge user=streamforge password=streamforge
+      FRAUD_SCAN_INTERVAL_SECONDS: 30
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+  dashboard:
+    build: ./dashboard
+    container_name: streamforge-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      POSTGRES_DSN: host=postgres port=5432 dbname=streamforge user=streamforge password=streamforge
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  kafka_data:
+  postgres_data:

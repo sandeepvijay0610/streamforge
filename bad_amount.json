@@ -1,0 +1,13 @@
+{
+  "event_id": "evt_bad_amount",
+  "event_type": "payment.succeeded",
+  "payload": {
+    "transaction_id": "txn_bad",
+    "user_id": "usr_x",
+    "amount": "seven hundred",
+    "currency": "INR",
+    "country_code": "IN",
+    "status": "SUCCESS",
+    "timestamp": "2026-10-03T16:00:00Z"
+  }
+}

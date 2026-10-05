@@ -1,0 +1,15 @@
+{
+  "event_id": "evt_smoke_001",
+  "event_type": "payment.succeeded",
+  "payload": {
+    "transaction_id": "txn_smoke_001",
+    "user_id": "usr_1",
+    "amount": 899.0,
+    "currency": "INR",
+    "merchant": "AMAZON",
+    "payment_method": "UPI",
+    "country_code": "IN",
+    "status": "SUCCESS",
+    "timestamp": "2026-10-03T15:40:00Z"
+  }
+}
